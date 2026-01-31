@@ -1,0 +1,9 @@
+# Build artifacts
+build/
+
+# macOS junk
+.DS_Store
+
+# VS Code (optional)
+.vscode/
+
