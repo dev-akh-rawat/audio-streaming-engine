@@ -1,7 +1,11 @@
 # Build artifacts
 build/
 
-# macOS junk
+# Tooling / editor artifacts
+.cache/
+compile_commands.json
+
+# macOS
 .DS_Store
 
 # VS Code (optional)
