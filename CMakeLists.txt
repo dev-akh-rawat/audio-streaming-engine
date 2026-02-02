@@ -17,3 +17,9 @@ target_include_directories(audio_streaming_engine PRIVATE
 target_compile_options(audio_streaming_engine PRIVATE
     -Wall -Wextra -Wpedantic
 )
+
+target_link_libraries(audio_streaming_engine
+    "-framework AudioToolbox"
+    "-framework CoreAudio"
+)
+
