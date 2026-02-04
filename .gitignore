@@ -11,3 +11,8 @@ compile_commands.json
 # VS Code (optional)
 .vscode/
 
+# Audio assets
+*.wav
+*.aiff
+*.aif
+

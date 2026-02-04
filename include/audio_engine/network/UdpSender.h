@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <vector>
 #include <cstring>
-
+#include <time.h>
 #include "audio_engine/audio/AudioFrame.h"
 #include "audio_engine/network/UdpAudioPacket.h"
 
@@ -28,6 +28,7 @@ public:
 
     void send_frame(const audio_engine::audio::AudioFrame& frame) {
         UdpAudioHeader header{};
+        header.send_time_ns = now_ns();
         header.sample_rate = frame.sample_rate;
         header.channels    = frame.channels;
         header.frames      = frame.frames;
@@ -51,6 +52,12 @@ public:
                0,
                reinterpret_cast<sockaddr*>(&addr_),
                sizeof(addr_));
+    }
+
+    uint64_t now_ns() {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return uint64_t(ts.tv_sec) * 1'000'000'000ULL + ts.tv_nsec;
     }
 
 private:
