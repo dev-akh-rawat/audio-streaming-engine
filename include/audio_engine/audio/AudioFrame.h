@@ -10,21 +10,26 @@ namespace audio_engine::audio {
  * This is the atomic unit exchanged between producer and consumer.
  */
 struct AudioFrame {
-    uint32_t sample_rate = 0;     // e.g. 44100, 48000
-    uint16_t channels    = 0;     // mono = 1, stereo = 2
-    uint16_t frames      = 0;     // number of samples per channel
-
-    // Interleaved samples: LRLRLR...
+    uint32_t sample_rate{0};
+    uint16_t channels{0};
+    uint16_t frames{0};
+    uint64_t pts{0};
     std::vector<float> samples;
 
+    // ✅ Default constructor (required)
     AudioFrame() = default;
 
-    AudioFrame(uint32_t sr, uint16_t ch, uint16_t f)
+    // Media constructor
+    AudioFrame(uint32_t sr,
+               uint16_t ch,
+               uint16_t fr,
+               uint64_t p = 0)
         : sample_rate(sr),
           channels(ch),
-          frames(f),
-          samples(ch * f, 0.0f)
-    {}
+          frames(fr),
+          pts(p),
+          samples(fr * ch) {}
 };
+
 
 } // namespace audio_engine::audio

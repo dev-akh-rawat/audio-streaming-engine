@@ -23,7 +23,7 @@ public:
     Engine(network::Metrics& metrics,
            size_t buffer_capacity = 8)
         : buffer_(buffer_capacity),
-          output_(buffer_, metrics)
+          output_(buffer_, metrics, stream_started_)
     {}
 
     buffer::RingBuffer<audio::AudioFrame>& buffer() {
@@ -31,15 +31,23 @@ public:
     }
 
     void start() {
+        stream_started_.store(false, std::memory_order_relaxed);
         output_.start();
     }
 
     void stop() {
         output_.stop();
+        stream_started_.store(false, std::memory_order_relaxed);
+    }
+
+    // 🔑 Called by drain thread once first frame is scheduled
+    void mark_stream_started() {
+        stream_started_.store(true, std::memory_order_release);
     }
 
 private:
     buffer::RingBuffer<audio::AudioFrame> buffer_;
+    std::atomic<bool> stream_started_{false};   // ✅ ADD THIS
     output::CoreAudioOutput output_;
 };
 

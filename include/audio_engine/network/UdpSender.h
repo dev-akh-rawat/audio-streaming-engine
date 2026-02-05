@@ -26,13 +26,16 @@ public:
             close(sock_);
     }
 
-    void send_frame(const audio_engine::audio::AudioFrame& frame) {
+    void send_frame(const audio::AudioFrame& frame,
+                uint32_t sequence,
+                uint64_t pts){
         UdpAudioHeader header{};
-        header.send_time_ns = now_ns();
+        header.sequence    = sequence;
         header.sample_rate = frame.sample_rate;
         header.channels    = frame.channels;
         header.frames      = frame.frames;
-        header.sequence    = sequence_++;
+        header.pts         = pts;
+
 
         const size_t payload_bytes =
             frame.samples.size() * sizeof(float);
@@ -63,7 +66,6 @@ public:
 private:
     int sock_{-1};
     sockaddr_in addr_{};
-    uint32_t sequence_{0};
 };
 
 } // namespace audio_engine::network

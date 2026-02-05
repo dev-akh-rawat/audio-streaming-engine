@@ -9,11 +9,11 @@ namespace audio_engine::network {
  * Payload follows immediately after header.
  */
 struct UdpAudioHeader {
+    uint32_t sequence;
     uint32_t sample_rate;
     uint16_t channels;
     uint16_t frames;
-    uint32_t sequence;
-    uint64_t send_time_ns;   // NEW
+    uint64_t pts;   // NEW: presentation timestamp (in samples)
 };
 
 

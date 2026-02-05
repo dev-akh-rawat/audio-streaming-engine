@@ -20,9 +20,11 @@ namespace audio_engine::output {
 class CoreAudioOutput {
 public:
     CoreAudioOutput(buffer::RingBuffer<audio::AudioFrame>& buffer,
-                    network::Metrics& metrics)
+                    network::Metrics& metrics,
+                    std::atomic<bool>& stream_started)
         : buffer_(buffer),
-          metrics_(metrics)
+          metrics_(metrics),
+          stream_started_(stream_started)
     {}
 
     bool start() {
@@ -99,27 +101,62 @@ private:
         float* out =
             static_cast<float*>(ioData->mBuffers[0].mData);
 
-        audio::AudioFrame frame;
-        if (!buffer_.pop(frame)) {
-            metrics_.underruns.fetch_add(1,
-                                         std::memory_order_relaxed);
-            std::fill(out, out + frames * 2, 0.0f);
+        const size_t samples_requested = frames * 2; // stereo
+        size_t samples_written = 0;
+
+        // 🔑 Stream not started yet → silence, no underrun
+        if (!stream_started_.load(std::memory_order_acquire)) {
+            std::fill(out, out + samples_requested, 0.0f);
             return noErr;
         }
 
-        std::copy(frame.samples.begin(),
-                  frame.samples.end(),
-                  out);
+        while (samples_written < samples_requested) {
 
-        metrics_.frames_rendered.fetch_add(1,
-                                           std::memory_order_relaxed);
+            // Need a new frame?
+            if (frame_offset_ >= current_frame_.samples.size()) {
+                if (!buffer_.pop(current_frame_)) {
+                    metrics_.underruns.fetch_add(
+                        1, std::memory_order_relaxed);
+                    std::fill(out + samples_written,
+                              out + samples_requested,
+                              0.0f);
+                    return noErr;
+                }
+                frame_offset_ = 0;
+            }
+
+            const size_t available =
+                current_frame_.samples.size() - frame_offset_;
+
+            const size_t to_copy =
+                std::min(available,
+                         samples_requested - samples_written);
+
+            std::copy_n(
+                current_frame_.samples.data() + frame_offset_,
+                to_copy,
+                out + samples_written
+            );
+
+            frame_offset_ += to_copy;
+            samples_written += to_copy;
+        }
+
+        metrics_.frames_rendered.fetch_add(
+            1, std::memory_order_relaxed);
+
         return noErr;
     }
 
 private:
     buffer::RingBuffer<audio::AudioFrame>& buffer_;
     network::Metrics& metrics_;
+    std::atomic<bool>& stream_started_;
     AudioUnit unit_{nullptr};
+
+    // 🔑 State for partial frame consumption
+    audio::AudioFrame current_frame_;
+    size_t frame_offset_{0};
 };
 
 } // namespace audio_engine::output
