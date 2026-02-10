@@ -21,10 +21,12 @@ class CoreAudioOutput {
 public:
     CoreAudioOutput(buffer::RingBuffer<audio::AudioFrame>& buffer,
                     network::Metrics& metrics,
-                    std::atomic<bool>& stream_started)
+                    std::atomic<bool>& stream_started,
+                    std::atomic<bool>& stream_ended)
         : buffer_(buffer),
           metrics_(metrics),
-          stream_started_(stream_started)
+          stream_started_(stream_started),
+          stream_ended_(stream_ended)
     {}
 
     bool start() {
@@ -98,13 +100,11 @@ private:
     }
 
     OSStatus render(AudioBufferList* ioData, UInt32 frames) {
-        float* out =
-            static_cast<float*>(ioData->mBuffers[0].mData);
-
-        const size_t samples_requested = frames * 2; // stereo
+        float* out = static_cast<float*>(ioData->mBuffers[0].mData);
+        const size_t samples_requested = frames * 2;
         size_t samples_written = 0;
 
-        // 🔑 Stream not started yet → silence, no underrun
+        // Stream not started yet → silence (NO underrun)
         if (!stream_started_.load(std::memory_order_acquire)) {
             std::fill(out, out + samples_requested, 0.0f);
             return noErr;
@@ -115,11 +115,12 @@ private:
             // Need a new frame?
             if (frame_offset_ >= current_frame_.samples.size()) {
                 if (!buffer_.pop(current_frame_)) {
-                    metrics_.underruns.fetch_add(
-                        1, std::memory_order_relaxed);
+                    // Partial silence only for remainder
                     std::fill(out + samples_written,
-                              out + samples_requested,
-                              0.0f);
+                            out + samples_requested,
+                            0.0f);
+                    metrics_.underruns.fetch_add(1,
+                        std::memory_order_relaxed);
                     return noErr;
                 }
                 frame_offset_ = 0;
@@ -130,7 +131,7 @@ private:
 
             const size_t to_copy =
                 std::min(available,
-                         samples_requested - samples_written);
+                        samples_requested - samples_written);
 
             std::copy_n(
                 current_frame_.samples.data() + frame_offset_,
@@ -142,19 +143,18 @@ private:
             samples_written += to_copy;
         }
 
-        metrics_.frames_rendered.fetch_add(
-            1, std::memory_order_relaxed);
-
         return noErr;
     }
+
 
 private:
     buffer::RingBuffer<audio::AudioFrame>& buffer_;
     network::Metrics& metrics_;
     std::atomic<bool>& stream_started_;
+    std::atomic<bool>& stream_ended_;
     AudioUnit unit_{nullptr};
 
-    // 🔑 State for partial frame consumption
+    // State for partial frame consumption
     audio::AudioFrame current_frame_;
     size_t frame_offset_{0};
 };

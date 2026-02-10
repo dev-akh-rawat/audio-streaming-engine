@@ -38,6 +38,6 @@ int main() {
         // ---- Media-clock pacing ----
         std::this_thread::sleep_until(next_send_time);
     }
-
+    sender.send_eos(sequence, pts);
     return 0;
 }

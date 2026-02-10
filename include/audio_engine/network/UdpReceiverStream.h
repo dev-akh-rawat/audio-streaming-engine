@@ -16,7 +16,7 @@
 #include "audio_engine/network/Metrics.h"
 #include "audio_engine/buffer/RingBuffer.h"
 #include "audio_engine/audio/AudioFrame.h"
-#include "audio_engine/engine/Engine.h"   // ✅ ADD
+#include "audio_engine/engine/Engine.h"
 
 namespace audio_engine::network {
 
@@ -24,20 +24,19 @@ namespace audio_engine::network {
  * UdpReceiverStream
  *
  * - Network thread receives UDP packets
- * - JitterBuffer absorbs jitter
- * - Drain thread moves frames into RingBuffer
- *
- * Audio engine NEVER touches sockets or jitter buffer.
+ * - JitterBuffer absorbs jitter & reorders packets
+ * - Drain thread enforces media timing (PTS → wall clock)
+ * - RingBuffer hands off to CoreAudio safely
  */
 class UdpReceiverStream {
 public:
     UdpReceiverStream(
         uint16_t port,
         Metrics& metrics,
-        engine::Engine& engine,                     // ✅ ADD
+        engine::Engine& engine,
         buffer::RingBuffer<audio::AudioFrame>& ring)
-        : jitter_(3, metrics),
-          engine_(engine),                          // ✅ ADD
+        : jitter_(12, metrics),
+          engine_(engine),
           ring_(ring)
     {
         sock_ = socket(AF_INET, SOCK_DGRAM, 0);
@@ -100,6 +99,12 @@ private:
             UdpAudioHeader header{};
             std::memcpy(&header, buffer.data(), sizeof(header));
 
+            // 🔑 EOS detection
+            if (header.flags & AUDIO_FLAG_EOS) {
+                stream_ended_.store(true, std::memory_order_release);
+                continue;
+            }
+
             audio::AudioFrame frame(
                 header.sample_rate,
                 header.channels,
@@ -126,24 +131,51 @@ private:
     void drain_loop() {
         using clock = std::chrono::steady_clock;
 
+        static constexpr size_t kPrerollFrames = 30;
+
         std::optional<uint64_t> first_pts;
         clock::time_point stream_start_time;
-        bool stream_marked = false;   // ✅ ensures one-time signal
+
+        bool stream_started = false;
+        bool preroll_done = false;
+        bool engine_eos_signaled = false;
 
         while (running_.load(std::memory_order_relaxed)) {
 
+            // 🔑 EOS propagation after jitter fully drained
+            if (stream_ended_.load(std::memory_order_acquire) &&
+                jitter_.empty() &&
+                !engine_eos_signaled) {
+
+                engine_.mark_stream_ended();
+                engine_eos_signaled = true;
+            }
+
+            // ---------------- PRE-ROLL GATE ----------------
+            if (!preroll_done) {
+                if (jitter_.depth() < kPrerollFrames) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(1));
+                    continue;
+                }
+                preroll_done = true;
+            }
+            // ------------------------------------------------
+
             auto frame = jitter_.pop();
             if (!frame) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(1));
                 continue;
             }
 
-            // Initialize media timeline once
+            // Initialize media timeline ONCE (NO clock shift!)
             if (!first_pts.has_value()) {
                 first_pts = frame->pts;
                 stream_start_time = clock::now();
             }
 
+            // PTS → wall-clock
             const uint64_t pts_offset =
                 frame->pts - *first_pts;
 
@@ -155,10 +187,13 @@ private:
                 std::chrono::duration_cast<clock::duration>(
                     std::chrono::duration<double>(seconds_from_start));
 
-            // Align to media clock
-            std::this_thread::sleep_until(target_time);
+            auto now = clock::now();
+            if (now + std::chrono::milliseconds(1) < target_time) {
+                std::this_thread::sleep_until(target_time);
+            }
+            // else: already late → push immediately
 
-            // Push to ring buffer
+            // Push to ring buffer (RT-safe handoff)
             while (running_.load(std::memory_order_relaxed) &&
                    !ring_.push(*frame)) {
                 std::this_thread::sleep_for(
@@ -166,9 +201,9 @@ private:
             }
 
             // 🔑 Signal stream start ONCE
-            if (!stream_marked) {
+            if (!stream_started) {
                 engine_.mark_stream_started();
-                stream_marked = true;
+                stream_started = true;
             }
         }
     }
@@ -177,12 +212,13 @@ private:
     int sock_{-1};
 
     JitterBuffer jitter_;
-    engine::Engine& engine_;                         // ✅ ADD
+    engine::Engine& engine_;
     buffer::RingBuffer<audio::AudioFrame>& ring_;
 
     std::atomic<bool> running_{false};
     std::thread recv_thread_;
     std::thread drain_thread_;
+    std::atomic<bool> stream_ended_{false};
 };
 
 } // namespace audio_engine::network
